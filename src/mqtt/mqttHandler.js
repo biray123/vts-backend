@@ -8,6 +8,7 @@ const { query, withTransaction } = require('../config/database');
 const MISSING_THRESHOLD_CYCLES = 3;
 
 let ioInstance = null; // Socket.io instance
+let isProcessing = false; // lock agar tidak ada dua siklus berjalan bersamaan
 
 function initMqtt(io) {
   ioInstance = io;
@@ -36,6 +37,11 @@ function initMqtt(io) {
   });
 
   client.on('message', async (topic, message) => {
+    if (isProcessing) {
+      console.log('[MQTT] Skip: masih memproses siklus sebelumnya');
+      return;
+    }
+    isProcessing = true;
     try {
       const payload = JSON.parse(message.toString());
       await processTelemetry(payload);
@@ -45,6 +51,8 @@ function initMqtt(io) {
       } else {
         console.error('[MQTT] Error proses telemetry:', err.message);
       }
+    } finally {
+      isProcessing = false;
     }
   });
 
