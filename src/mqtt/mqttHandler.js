@@ -129,6 +129,7 @@ async function processTelemetry(payload) {
 
   // 4. Simpan semua data dalam satu transaksi
   const newAlerts = [];
+  const recoveredAlerts = [];
 
   await withTransaction(async (client) => {
     // Insert TELEMETRY (induk siklus)
@@ -206,6 +207,28 @@ async function processTelemetry(payload) {
             });
           }
         }
+      } else {
+        // Paket terdeteksi kembali — selesaikan alert aktif dan pulihkan status
+        const activeAlert = await client.query(
+          `SELECT id FROM alert
+           WHERE trip_id = $1 AND package_id = $2 AND status_alert = 'baru'`,
+          [trip_id, pkg.package_id]
+        );
+        if (activeAlert.rows.length > 0) {
+          await client.query(
+            `UPDATE alert SET status_alert = 'selesai'
+             WHERE trip_id = $1 AND package_id = $2 AND status_alert = 'baru'`,
+            [trip_id, pkg.package_id]
+          );
+          await client.query(
+            `UPDATE package SET status_paket = 'dalam_perjalanan' WHERE id = $1`,
+            [pkg.package_id]
+          );
+          recoveredAlerts.push({
+            alert_id: activeAlert.rows[0].id,
+            kode_paket: pkg.kode_paket,
+          });
+        }
       }
     }
   });
@@ -238,6 +261,19 @@ async function processTelemetry(payload) {
         alert,
       });
       console.log(`[MQTT] ⚠️ ALERT: Paket ${alert.rfid_tag_epc} hilang di ${gps.lat},${gps.lon}`);
+    }
+
+    // Broadcast recovery ke admin, trip room, dan customer tracking room
+    for (const recovered of recoveredAlerts) {
+      const recoveryPayload = {
+        trip_id,
+        kode_truk,
+        alert_id: recovered.alert_id,
+        kode_paket: recovered.kode_paket,
+      };
+      ioInstance.to('admin_room').to(`trip_${trip_id}`).emit('paket_ditemukan', recoveryPayload);
+      ioInstance.to(`pkg_${recovered.kode_paket}`).emit('paket_ditemukan', recoveryPayload);
+      console.log(`[MQTT] ✅ RECOVERED: Paket ${recovered.kode_paket} terdeteksi kembali`);
     }
   }
 

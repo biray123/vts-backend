@@ -31,7 +31,78 @@ async function trackPackage(req, res, next) {
     );
 
     if (tripRes.rows.length === 0) {
-      // Tidak ada trip aktif - kembalikan status saja
+      // Cek apakah ada trip yang sudah selesai membawa paket ini
+      const completedRes = await query(
+        `SELECT t.id AS trip_id, t.rute_asal, t.rute_tujuan, t.waktu_selesai,
+                tr.kode_truk, tr.nomor_polisi
+         FROM trip t
+         JOIN truck tr ON tr.id = t.truck_id
+         JOIN manifest m ON m.id = t.manifest_id
+         JOIN manifest_package mp ON mp.manifest_id = m.id
+         WHERE mp.package_id = $1 AND t.status_trip = 'selesai'
+         ORDER BY t.waktu_selesai DESC LIMIT 1`,
+        [pkg.id]
+      );
+
+      // completedRes mungkin 0 rows jika manifest_package tidak lengkap.
+      // Gunakan rfid_event sebagai fallback untuk menemukan trip.
+      let resolvedTrip = completedRes.rows[0] ?? null;
+
+      if (!resolvedTrip) {
+        const rfidTripRes = await query(
+          `SELECT DISTINCT ON (t.id)
+                  t.id AS trip_id, t.rute_asal, t.rute_tujuan,
+                  t.waktu_selesai, t.status_trip,
+                  tr.kode_truk, tr.nomor_polisi
+           FROM rfid_event re
+           JOIN trip t  ON t.id  = re.trip_id
+           JOIN truck tr ON tr.id = t.truck_id
+           WHERE re.package_id = $1
+             AND t.status_trip NOT IN ('berjalan', 'persiapan')
+           ORDER BY t.id DESC
+           LIMIT 1`,
+          [pkg.id]
+        );
+        resolvedTrip = rfidTripRes.rows[0] ?? null;
+      }
+
+      if (resolvedTrip) {
+        const ct = resolvedTrip;
+
+        // Koreksi status stale: jika DB mengatakan 'hilang' tapi event RFID
+        // terakhir menunjukkan terdeteksi, paket sebenarnya berhasil terkirim.
+        let finalStatus = pkg.status_paket;
+        if (pkg.status_paket === 'hilang') {
+          const lastRfid = await query(
+            `SELECT is_detected FROM rfid_event
+             WHERE package_id = $1 AND trip_id = $2
+             ORDER BY timestamp DESC LIMIT 1`,
+            [pkg.id, ct.trip_id]
+          );
+          if (lastRfid.rows[0]?.is_detected === true) {
+            finalStatus = 'terkirim';
+          }
+        }
+
+        return res.json({
+          success: true,
+          data: {
+            kode_paket: pkg.kode_paket,
+            nama_penerima: pkg.nama_penerima,
+            alamat_tujuan: pkg.alamat_tujuan,
+            status_paket: finalStatus,
+            sedang_dalam_perjalanan: false,
+            perjalanan_selesai: true,
+            waktu_selesai: ct.waktu_selesai,
+            rute: { dari: ct.rute_asal, ke: ct.rute_tujuan },
+            kendaraan: { kode_truk: ct.kode_truk, nomor_polisi: ct.nomor_polisi },
+            posisi_kendaraan: null,
+            status_rfid: null,
+          },
+        });
+      }
+
+      // Belum pernah dalam perjalanan apapun
       return res.json({
         success: true,
         data: {
@@ -40,6 +111,7 @@ async function trackPackage(req, res, next) {
           alamat_tujuan: pkg.alamat_tujuan,
           status_paket: pkg.status_paket,
           sedang_dalam_perjalanan: false,
+          perjalanan_selesai: false,
           posisi_kendaraan: null,
         },
       });

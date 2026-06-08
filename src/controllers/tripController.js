@@ -147,6 +147,17 @@ async function startTrip(req, res, next) {
     // Update status truk
     await query('UPDATE truck SET status = $1 WHERE id = $2', ['aktif', result.rows[0].truck_id]);
 
+    // Tandai semua paket dalam manifest sebagai dalam_perjalanan
+    await query(
+      `UPDATE package SET status_paket = 'dalam_perjalanan'
+       WHERE status_paket = 'pending'
+         AND id IN (
+           SELECT mp.package_id FROM manifest_package mp
+           WHERE mp.manifest_id = $1
+         )`,
+      [result.rows[0].manifest_id]
+    );
+
     if (ioInstance) {
       ioInstance.to('admin_room').emit('trip_started', { trip_id: result.rows[0].id });
     }
@@ -173,8 +184,52 @@ async function finishTrip(req, res, next) {
     await query('UPDATE truck SET status = $1 WHERE id = $2', ['idle', result.rows[0].truck_id]);
     await query('UPDATE manifest SET status = $1 WHERE id = $2', ['selesai', result.rows[0].manifest_id]);
 
+    // Paket yang masih dalam_perjalanan → 'terkirim'
+    await query(
+      `UPDATE package SET status_paket = 'terkirim'
+       WHERE status_paket = 'dalam_perjalanan'
+         AND id IN (
+           SELECT mp.package_id FROM manifest_package mp
+           WHERE mp.manifest_id = $1
+         )`,
+      [result.rows[0].manifest_id]
+    );
+
+    // Paket berstatus 'hilang' yang RFID event terakhirnya is_detected=true
+    // (race condition: driver tekan "Sampai" sesaat sebelum recovery MQTT diproses)
+    await query(
+      `UPDATE package SET status_paket = 'terkirim'
+       WHERE status_paket = 'hilang'
+         AND id IN (
+           SELECT mp.package_id FROM manifest_package mp
+           WHERE mp.manifest_id = $1
+         )
+         AND id IN (
+           SELECT r.package_id
+           FROM (
+             SELECT DISTINCT ON (package_id) package_id, is_detected
+             FROM rfid_event
+             WHERE trip_id = $2
+             ORDER BY package_id, timestamp DESC
+           ) r
+           WHERE r.is_detected = true
+         )`,
+      [result.rows[0].manifest_id, parseInt(id)]
+    );
+
     if (ioInstance) {
       ioInstance.to('admin_room').emit('trip_finished', { trip_id: parseInt(id) });
+
+      // Beritahu customer tracking room bahwa trip sudah selesai
+      const pkgsRes = await query(
+        `SELECT p.kode_paket FROM package p
+         JOIN manifest_package mp ON mp.package_id = p.id
+         WHERE mp.manifest_id = $1`,
+        [result.rows[0].manifest_id]
+      );
+      for (const pkg of pkgsRes.rows) {
+        ioInstance.to(`pkg_${pkg.kode_paket}`).emit('trip_finished', { trip_id: parseInt(id) });
+      }
     }
 
     res.json({ success: true, data: result.rows[0] });
