@@ -85,7 +85,12 @@ async function createManifest(req, res, next) {
         const pkgRes = await client.query(
           `INSERT INTO package (rfid_tag_epc, kode_paket, nama_pengirim, nama_penerima, alamat_tujuan, berat_kg)
            VALUES ($1, $2, $3, $4, $5, $6)
-           ON CONFLICT (rfid_tag_epc) DO UPDATE SET kode_paket = EXCLUDED.kode_paket
+           ON CONFLICT (rfid_tag_epc) DO UPDATE SET
+             kode_paket = EXCLUDED.kode_paket,
+             nama_pengirim = EXCLUDED.nama_pengirim,
+             nama_penerima = EXCLUDED.nama_penerima,
+             alamat_tujuan = EXCLUDED.alamat_tujuan,
+             berat_kg = EXCLUDED.berat_kg
            RETURNING id`,
           [pkg.rfid_tag_epc, pkg.kode_paket, pkg.nama_pengirim, pkg.nama_penerima, pkg.alamat_tujuan, pkg.berat_kg || null]
         );

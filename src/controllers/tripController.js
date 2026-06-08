@@ -73,8 +73,8 @@ async function getTripById(req, res, next) {
 
     // Paket dalam manifest + status terdeteksi terakhir
     const packages = await query(
-      `SELECT p.id, p.rfid_tag_epc, p.kode_paket, p.nama_penerima, p.alamat_tujuan,
-              p.status_paket,
+      `SELECT p.id, p.rfid_tag_epc, p.kode_paket, p.nama_pengirim, p.nama_penerima,
+              p.alamat_tujuan, p.berat_kg, p.status_paket,
               re.is_detected AS terdeteksi_terakhir,
               re.timestamp AS waktu_cek_terakhir
        FROM package p
@@ -317,7 +317,7 @@ async function getPackageTrace(req, res, next) {
     const { id: trip_id, pkg_id } = req.params;
 
     const pkgRes = await query(
-      `SELECT id, kode_paket, rfid_tag_epc, nama_penerima, alamat_tujuan, status_paket
+      `SELECT id, kode_paket, rfid_tag_epc, nama_pengirim, nama_penerima, alamat_tujuan, berat_kg, status_paket
        FROM package WHERE id = $1`,
       [pkg_id]
     );
