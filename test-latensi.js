@@ -45,6 +45,7 @@ socket.on('connect', () => {
 
 socket.on('telemetry_update', (payload) => {
   const t2 = Date.now(); // browser terima
+  console.log('   [debug] terima telemetry_update → sent_ms:', payload.sent_ms, '| server_received_ms:', payload.server_received_ms);
   if (!pending || payload.sent_ms == null) return; // abaikan pesan yg bukan dari uji ini
   const t0 = payload.sent_ms;
   const t1 = payload.server_received_ms;
