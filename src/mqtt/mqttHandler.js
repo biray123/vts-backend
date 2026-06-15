@@ -37,6 +37,7 @@ function initMqtt(io) {
   });
 
   client.on('message', async (topic, message) => {
+    const recvMs = Date.now(); // t1: waktu backend menerima pesan dari broker (untuk uji latensi NFR-02)
     if (isProcessing) {
       console.log('[MQTT] Skip: masih memproses siklus sebelumnya');
       return;
@@ -44,7 +45,7 @@ function initMqtt(io) {
     isProcessing = true;
     try {
       const payload = JSON.parse(message.toString());
-      await processTelemetry(payload);
+      await processTelemetry(payload, recvMs);
     } catch (err) {
       if (err instanceof SyntaxError) {
         console.error('[MQTT] Payload bukan JSON valid:', message.toString().substring(0, 100));
@@ -81,7 +82,7 @@ function initMqtt(io) {
  *   "detected_packages": ["TAG-001", "TAG-002"]
  * }
  */
-async function processTelemetry(payload) {
+async function processTelemetry(payload, recvMs) {
   const { timestamp, id: kode_truk, gps, detected_packages } = payload;
 
   // Validasi field wajib
@@ -244,6 +245,9 @@ async function processTelemetry(payload) {
       completeness_pct,
       terdeteksi,
       total_paket: totalPaket,
+      // Field uji latensi NFR-02 (diteruskan kembali ke klien untuk hitung Δt)
+      sent_ms: payload.sent_ms ?? null,        // t0: waktu ESP32/simulator publish
+      server_received_ms: recvMs ?? null,      // t1: waktu backend terima dari broker
     };
 
     // Emit ke room admin + room monitoring trip
