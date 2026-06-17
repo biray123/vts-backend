@@ -25,10 +25,42 @@ const adminRoutes     = require('./routes/admin');
 const app = express();
 const server = http.createServer(app);
 
+// ────────────────────────────────
+//  CORS: whitelist + pola devtunnels (untuk testing dari HP via VSCode port forward)
+// ────────────────────────────────
+const allowedOrigins = (process.env.CLIENT_ORIGIN || 'http://localhost:3000')
+  .split(',')
+  .map((o) => o.trim())
+  .filter(Boolean);
+
+function isOriginAllowed(origin) {
+  // izinkan request tanpa origin (Postman, curl, server-to-server)
+  if (!origin) return true;
+  if (allowedOrigins.includes(origin)) return true;
+  try {
+    const { hostname } = new URL(origin);
+    // izinkan semua subdomain VSCode dev tunnels (*.devtunnels.ms)
+    if (/\.devtunnels\.ms$/.test(hostname)) return true;
+  } catch {
+    return false;
+  }
+  return false;
+}
+
+const corsOptions = {
+  origin(origin, callback) {
+    if (isOriginAllowed(origin)) return callback(null, true);
+    callback(new Error(`Not allowed by CORS: ${origin}`));
+  },
+};
+
 // Socket.io
 const io = new Server(server, {
   cors: {
-    origin: process.env.CLIENT_ORIGIN || 'http://localhost:3000',
+    origin(origin, callback) {
+      if (isOriginAllowed(origin)) return callback(null, true);
+      callback(new Error(`Not allowed by CORS: ${origin}`));
+    },
     methods: ['GET', 'POST'],
   },
 });
@@ -37,7 +69,7 @@ const io = new Server(server, {
 //  Middleware global
 // ────────────────────────────────
 app.use(helmet());
-app.use(cors({ origin: process.env.CLIENT_ORIGIN || 'http://localhost:3000' }));
+app.use(cors(corsOptions));
 app.use(morgan(process.env.NODE_ENV === 'production' ? 'combined' : 'dev'));
 app.use(express.json());
 app.use(express.urlencoded({ extended: true }));
