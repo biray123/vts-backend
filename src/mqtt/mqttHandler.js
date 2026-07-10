@@ -10,6 +10,15 @@ const MISSING_THRESHOLD_CYCLES = 1;
 let ioInstance = null; // Socket.io instance
 let isProcessing = false; // lock agar tidak ada dua siklus berjalan bersamaan
 
+// Kondisi terakhir tiap alat (online, gps_fix, signal_csq) — in-memory saja,
+// tidak disimpan ke database. Topic status bersifat retained di broker, jadi
+// saat backend restart, broker langsung mengirim ulang kondisi terakhir.
+const deviceStatus = {};
+
+function getDeviceStatus() {
+  return deviceStatus;
+}
+
 function initMqtt(io) {
   ioInstance = io;
 
@@ -34,10 +43,23 @@ function initMqtt(io) {
       if (err) console.error('[MQTT] Gagal subscribe:', err.message);
       else console.log('[MQTT] Subscribe ke:', process.env.MQTT_TOPIC_TELEMETRY);
     });
+    // Status alat (online/offline via LWT, gps_fix, kekuatan sinyal)
+    const topicStatus = process.env.MQTT_TOPIC_STATUS || 'vts/status/#';
+    client.subscribe(topicStatus, { qos: 1 }, (err) => {
+      if (err) console.error('[MQTT] Gagal subscribe status:', err.message);
+      else console.log('[MQTT] Subscribe ke:', topicStatus);
+    });
   });
 
   client.on('message', async (topic, message) => {
     const recvMs = Date.now(); // t1: waktu backend menerima pesan dari broker (untuk uji latensi NFR-02)
+
+    // Pesan status alat: proses ringan, tanpa database, tanpa lock siklus
+    if (topic.startsWith('vts/status/')) {
+      handleDeviceStatus(message);
+      return;
+    }
+
     if (isProcessing) {
       console.log('[MQTT] Skip: masih memproses siklus sebelumnya');
       return;
@@ -70,6 +92,33 @@ function initMqtt(io) {
   });
 
   return client;
+}
+
+/**
+ * Proses pesan status alat dari topic vts/status/<TRUCK_ID>
+ * Payload dari firmware: { id, online, gps_fix, signal_csq, uptime_s }
+ * Saat alat putus mendadak, broker menerbitkan LWT: { id, online: false }
+ */
+function handleDeviceStatus(message) {
+  try {
+    const st = JSON.parse(message.toString());
+    if (!st.id) return;
+
+    deviceStatus[st.id] = {
+      id: st.id,
+      online: st.online === true,
+      gps_fix: st.gps_fix ?? null,
+      signal_csq: st.signal_csq ?? null,
+      uptime_s: st.uptime_s ?? null,
+      last_seen: new Date().toISOString(),
+    };
+
+    if (ioInstance) {
+      ioInstance.to('admin_room').emit('device_status', deviceStatus[st.id]);
+    }
+  } catch {
+    console.warn('[MQTT] Payload status bukan JSON valid:', message.toString().substring(0, 80));
+  }
 }
 
 /**
@@ -287,4 +336,4 @@ async function processTelemetry(payload, recvMs) {
   }
 }
 
-module.exports = { initMqtt };
+module.exports = { initMqtt, getDeviceStatus };

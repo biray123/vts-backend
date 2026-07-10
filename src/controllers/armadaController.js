@@ -1,5 +1,6 @@
 const { query } = require('../config/database');
 const { assertTripAccess } = require('./tripController');
+const { getDeviceStatus } = require('../mqtt/mqttHandler');
 
 // GET /api/armada - semua truk aktif + posisi terakhir + status muatan
 async function getArmadaAktif(req, res, next) {
@@ -122,4 +123,10 @@ async function getDetailMuatan(req, res, next) {
   }
 }
 
-module.exports = { getArmadaAktif, getDetailMuatan };
+// GET /api/armada/device-status - kondisi alat per truk (online, gps_fix, sinyal)
+// Sumber: in-memory dari topic MQTT vts/status/# (tidak menyentuh database)
+function getDeviceStatusList(req, res) {
+  res.json({ success: true, data: getDeviceStatus() });
+}
+
+module.exports = { getArmadaAktif, getDetailMuatan, getDeviceStatusList };
