@@ -136,6 +136,41 @@ async function trackPackage(req, res, next) {
       [trip.trip_id, pkg.id]
     );
 
+    let statusRfid = null;
+    let posisiKendaraan = gpsRes.rows[0] || null;
+
+    if (rfidRes.rows[0]) {
+      statusRfid = {
+        terdeteksi: rfidRes.rows[0].is_detected,
+        waktu: rfidRes.rows[0].timestamp,
+        terakhir_terdeteksi: null,
+      };
+
+      if (!rfidRes.rows[0].is_detected) {
+        // Paket tidak terdeteksi: tampilkan lokasi & waktu saat paket
+        // terakhir kali terbaca RFID, bukan posisi truk saat ini.
+        const lastSeenRes = await query(
+          `SELECT latitude, longitude, timestamp
+           FROM rfid_event
+           WHERE trip_id = $1 AND package_id = $2 AND is_detected = true
+           ORDER BY timestamp DESC LIMIT 1`,
+          [trip.trip_id, pkg.id]
+        );
+        const lastSeen = lastSeenRes.rows[0];
+        if (lastSeen) {
+          statusRfid.terakhir_terdeteksi = lastSeen.timestamp;
+          posisiKendaraan = {
+            latitude: lastSeen.latitude,
+            longitude: lastSeen.longitude,
+            kecepatan_kmh: null,
+            timestamp: lastSeen.timestamp,
+          };
+        }
+        // Jika paket tidak pernah terdeteksi di trip ini, fallback ke
+        // posisi truk terakhir (posisiKendaraan tetap dari gps_log).
+      }
+    }
+
     res.json({
       success: true,
       data: {
@@ -146,10 +181,8 @@ async function trackPackage(req, res, next) {
         sedang_dalam_perjalanan: true,
         rute: { dari: trip.rute_asal, ke: trip.rute_tujuan },
         kendaraan: { kode_truk: trip.kode_truk, nomor_polisi: trip.nomor_polisi },
-        posisi_kendaraan: gpsRes.rows[0] || null,
-        status_rfid: rfidRes.rows[0]
-          ? { terdeteksi: rfidRes.rows[0].is_detected, waktu: rfidRes.rows[0].timestamp }
-          : null,
+        posisi_kendaraan: posisiKendaraan,
+        status_rfid: statusRfid,
       },
     });
   } catch (err) {

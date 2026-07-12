@@ -172,7 +172,7 @@ async function processTelemetry(payload, recvMs) {
   if (totalPaket === 0) return;
 
   // 3. Hitung Ck (completeness) — Persamaan 3.1 dari dokumen CD-3
-  // Ck = (jumlah tag manifest yang terbaca / N) × 100%
+  // Ck = (N_terdeteksi / N_total) × 100%
   const detectedSet = new Set(detected_packages.map(tag => tag.toUpperCase()));
   const terdeteksi = manifestPackages.filter(p => detectedSet.has(p.rfid_tag_epc.toUpperCase())).length;
   const completeness_pct = parseFloat(((terdeteksi / totalPaket) * 100).toFixed(2));
