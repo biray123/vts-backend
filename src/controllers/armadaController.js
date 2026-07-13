@@ -129,4 +129,27 @@ function getDeviceStatusList(req, res) {
   res.json({ success: true, data: getDeviceStatus() });
 }
 
-module.exports = { getArmadaAktif, getDetailMuatan, getDeviceStatusList };
+// GET /api/armada/alerts - semua alert aktif (status 'baru') pada trip yang
+// sedang berjalan, lintas truk. Dipakai dashboard agar panel alert tetap
+// terisi setelah refresh; alert yang sudah pulih (status 'selesai') tidak ikut.
+async function getActiveAlerts(req, res, next) {
+  try {
+    const result = await query(
+      `SELECT a.id, a.trip_id, a.package_id, a.jenis_alert, a.deskripsi, a.timestamp,
+              p.kode_paket, tr.kode_truk
+       FROM alert a
+       JOIN trip t   ON t.id  = a.trip_id
+       JOIN truck tr ON tr.id = t.truck_id
+       JOIN package p ON p.id = a.package_id
+       WHERE a.status_alert = 'baru'
+         AND t.status_trip IN ('berjalan', 'persiapan')
+       ORDER BY a.timestamp DESC
+       LIMIT 20`
+    );
+    res.json({ success: true, data: result.rows });
+  } catch (err) {
+    next(err);
+  }
+}
+
+module.exports = { getArmadaAktif, getDetailMuatan, getDeviceStatusList, getActiveAlerts };
