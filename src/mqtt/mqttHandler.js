@@ -134,11 +134,15 @@ function handleDeviceStatus(message) {
 async function processTelemetry(payload, recvMs) {
   const { timestamp, id: kode_truk, gps, detected_packages } = payload;
 
-  // Validasi field wajib
-  if (!kode_truk || !gps || !Array.isArray(detected_packages)) {
+  // Validasi field wajib. gps boleh null (GPS belum fix) — RFID tetap diproses
+  // agar status paket & Ck terus terpantau walau posisi truk belum diketahui.
+  if (!kode_truk || !Array.isArray(detected_packages)) {
     console.warn('[MQTT] Payload tidak lengkap:', JSON.stringify(payload).substring(0, 100));
     return;
   }
+  const hasGps = gps != null
+    && Number.isFinite(Number(gps.lat))
+    && Number.isFinite(Number(gps.lon));
 
   // 1. Cari trip aktif untuk truk ini
   const tripRes = await query(
@@ -190,21 +194,25 @@ async function processTelemetry(payload, recvMs) {
     );
     const telemetry_id = telRes.rows[0].id;
 
-    // Insert GPS_LOG (speed dikirim oleh SIM7600G/GPS module langsung dalam km/h)
-    await client.query(
-      `INSERT INTO gps_log (trip_id, telemetry_id, latitude, longitude, kecepatan_kmh, timestamp)
-       VALUES ($1, $2, $3, $4, $5, $6)`,
-      [trip_id, telemetry_id, gps.lat, gps.lon, gps.speed ?? null, tsDate]
-    );
+    // Insert GPS_LOG hanya jika ada koordinat valid (kolom lat/lon NOT NULL)
+    // (speed dikirim oleh SIM7600G/GPS module langsung dalam km/h)
+    if (hasGps) {
+      await client.query(
+        `INSERT INTO gps_log (trip_id, telemetry_id, latitude, longitude, kecepatan_kmh, timestamp)
+         VALUES ($1, $2, $3, $4, $5, $6)`,
+        [trip_id, telemetry_id, gps.lat, gps.lon, gps.speed ?? null, tsDate]
+      );
+    }
 
-    // Insert RFID_EVENT per paket + cek anomali
+    // Insert RFID_EVENT per paket + cek anomali (lat/lon nullable saat GPS belum fix)
     for (const pkg of manifestPackages) {
       const is_detected = detectedSet.has(pkg.rfid_tag_epc.toUpperCase());
 
       await client.query(
         `INSERT INTO rfid_event (trip_id, telemetry_id, package_id, is_detected, latitude, longitude, timestamp)
          VALUES ($1, $2, $3, $4, $5, $6, $7)`,
-        [trip_id, telemetry_id, pkg.package_id, is_detected, gps.lat, gps.lon, tsDate]
+        [trip_id, telemetry_id, pkg.package_id, is_detected,
+         hasGps ? gps.lat : null, hasGps ? gps.lon : null, tsDate]
       );
 
       // Cek apakah paket ini hilang berdasarkan threshold
@@ -240,7 +248,7 @@ async function processTelemetry(payload, recvMs) {
               [
                 trip_id,
                 pkg.package_id,
-                `Paket ${pkg.rfid_tag_epc} tidak terdeteksi pada siklus terakhir. Lokasi terakhir: ${gps.lat}, ${gps.lon}`,
+                `Paket ${pkg.rfid_tag_epc} tidak terdeteksi pada siklus terakhir. Lokasi terakhir: ${hasGps ? `${gps.lat}, ${gps.lon}` : 'tidak diketahui (GPS belum fix)'}`,
               ]
             );
 
@@ -254,7 +262,7 @@ async function processTelemetry(payload, recvMs) {
               ...alertRes.rows[0],
               kode_paket:  pkg.kode_paket,
               rfid_tag_epc: pkg.rfid_tag_epc,
-              lokasi: { lat: gps.lat, lon: gps.lon },
+              lokasi: hasGps ? { lat: gps.lat, lon: gps.lon } : null,
             });
           }
         }
@@ -290,7 +298,7 @@ async function processTelemetry(payload, recvMs) {
       trip_id,
       kode_truk,
       timestamp: tsDate,
-      gps: { lat: gps.lat, lon: gps.lon },
+      gps: hasGps ? { lat: gps.lat, lon: gps.lon } : null,
       completeness_pct,
       terdeteksi,
       total_paket: totalPaket,
@@ -314,7 +322,7 @@ async function processTelemetry(payload, recvMs) {
         kode_truk,
         alert,
       });
-      console.log(`[MQTT] ⚠️ ALERT: Paket ${alert.rfid_tag_epc} hilang di ${gps.lat},${gps.lon}`);
+      console.log(`[MQTT] ⚠️ ALERT: Paket ${alert.rfid_tag_epc} hilang di ${hasGps ? `${gps.lat},${gps.lon}` : 'lokasi tidak diketahui'}`);
     }
 
     // Broadcast recovery ke admin, trip room, dan customer tracking room
@@ -332,7 +340,7 @@ async function processTelemetry(payload, recvMs) {
   }
 
   if (process.env.NODE_ENV === 'development') {
-    console.log(`[MQTT] ${kode_truk} | Ck=${completeness_pct}% (${terdeteksi}/${totalPaket}) | GPS: ${gps.lat},${gps.lon}`);
+    console.log(`[MQTT] ${kode_truk} | Ck=${completeness_pct}% (${terdeteksi}/${totalPaket}) | GPS: ${hasGps ? `${gps.lat},${gps.lon}` : '(belum fix)'}`);
   }
 }
 

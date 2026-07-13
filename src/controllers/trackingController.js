@@ -153,6 +153,7 @@ async function trackPackage(req, res, next) {
           `SELECT latitude, longitude, timestamp
            FROM rfid_event
            WHERE trip_id = $1 AND package_id = $2 AND is_detected = true
+             AND latitude IS NOT NULL AND longitude IS NOT NULL
            ORDER BY timestamp DESC LIMIT 1`,
           [trip.trip_id, pkg.id]
         );
