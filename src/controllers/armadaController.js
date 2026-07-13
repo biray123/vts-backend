@@ -101,7 +101,7 @@ async function getDetailMuatan(req, res, next) {
 
     // Alert aktif untuk trip ini
     const alertRes = await query(
-      `SELECT a.id, a.jenis_alert, a.deskripsi, a.status_alert, a.timestamp,
+      `SELECT a.id, a.package_id, a.jenis_alert, a.deskripsi, a.status_alert, a.timestamp,
               p.kode_paket
        FROM alert a JOIN package p ON p.id = a.package_id
        WHERE a.trip_id = $1 AND a.status_alert = 'baru'
