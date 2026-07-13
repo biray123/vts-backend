@@ -192,11 +192,12 @@ async function startTrip(req, res, next) {
     // Update status truk
     await query('UPDATE truck SET status = $1 WHERE id = $2', ['aktif', result.rows[0].truck_id]);
 
-    // Tandai semua paket dalam manifest sebagai dalam_perjalanan
+    // Tandai semua paket dalam manifest sebagai dalam_perjalanan.
+    // Tanpa filter status: paket bekas trip lama (hilang/terkirim) yang
+    // dimuat ulang ke manifest baru harus ikut ter-reset, bukan hanya 'pending'.
     await query(
       `UPDATE package SET status_paket = 'dalam_perjalanan'
-       WHERE status_paket = 'pending'
-         AND id IN (
+       WHERE id IN (
            SELECT mp.package_id FROM manifest_package mp
            WHERE mp.manifest_id = $1
          )`,

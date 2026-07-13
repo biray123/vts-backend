@@ -25,6 +25,16 @@ Cara pakai:
   # Simulasikan paket hilang mulai 50% perjalanan (memicu alert PAKET_HILANG):
   python tools/simulate_esp32_dummy.py --interval 2 --lost PKT-03 PKT-07 --lost-at 0.5
 
+  # Paket hilang di 30% lalu terdeteksi kembali di 70% (uji recovery alert):
+  python tools/simulate_esp32_dummy.py --interval 2 --lost PKT-03 --lost-at 0.3 --found-at 0.7
+
+  # GPS belum fix di 5 siklus pertama (uji telemetri "gps":null — RFID tetap terkirim,
+  # dashboard harus tetap update Ck/status paket walau peta belum ada posisi):
+  python tools/simulate_esp32_dummy.py --interval 2 --nofix 5
+
+  # Skenario lengkap: tanpa GPS dulu, lalu fix, lalu 1 paket hilang:
+  python tools/simulate_esp32_dummy.py --interval 2 --nofix 4 --lost PKT-05 --lost-at 0.5
+
   # Kirim satu pesan saja lalu berhenti (tes koneksi cepat):
   python tools/simulate_esp32_dummy.py --once
 """
@@ -153,38 +163,58 @@ def main():
                    help="Kode paket yang 'hilang' di tengah jalan, mis: --lost PKT-03 PKT-07")
     p.add_argument("--lost-at", type=float, default=0.5, dest="lost_at",
                    help="Fraksi perjalanan saat paket mulai hilang (0.0-1.0, default 0.5)")
+    p.add_argument("--found-at", type=float, default=None, dest="found_at",
+                   help="Fraksi perjalanan saat paket --lost terdeteksi kembali (uji recovery)")
+    p.add_argument("--nofix", type=int, default=0, metavar="N",
+                   help="N siklus pertama dikirim TANPA koordinat (gps:null) — "
+                        "meniru firmware yang belum dapat fix satelit")
     p.add_argument("--once", action="store_true",
                    help="Kirim 1 pesan di waypoint pertama lalu berhenti (tes koneksi)")
     args = p.parse_args()
+
+    if args.found_at is not None and args.found_at <= args.lost_at:
+        p.error("--found-at harus lebih besar dari --lost-at")
 
     bad = [k for k in args.lost if k not in PACKAGES]
     if bad:
         p.error(f"Kode paket tidak dikenal: {bad}. Gunakan PKT-01 s.d. PKT-20.")
 
     client = connect_mqtt()
-    total = 1 if args.once else len(WAYPOINTS)
+    nofix = 0 if args.once else max(0, args.nofix)
+    total = 1 if args.once else nofix + len(WAYPOINTS)
 
     print(f"[SIM]  Topic    : {TOPIC}")
     print(f"[SIM]  Paket    : {len(PACKAGES)} tag" +
-          (f" | hilang: {', '.join(args.lost)} mulai {args.lost_at*100:.0f}%" if args.lost else ""))
+          (f" | hilang: {', '.join(args.lost)} mulai {args.lost_at*100:.0f}%" if args.lost else "") +
+          (f" | kembali di {args.found_at*100:.0f}%" if args.found_at is not None else ""))
+    if nofix:
+        print(f"[SIM]  GPS      : {nofix} siklus pertama tanpa fix (gps:null)")
     print(f"[SIM]  Siklus   : {total} x tiap {args.interval:g}s\n")
 
     try:
-        for i in range(total):
+        for cycle in range(total):
+            has_fix = cycle >= nofix  # fase awal: satelit belum dapat fix
+            i = max(0, cycle - nofix)  # indeks waypoint (truk "diam" selama nofix)
             lat, lon, speed = WAYPOINTS[i]
-            progress = i / max(len(WAYPOINTS) - 1, 1)
+            progress = i / max(len(WAYPOINTS) - 1, 1) if has_fix else 0.0
 
             # Status alat tiap siklus (CSQ divariasikan sedikit agar terlihat hidup)
-            publish_status(client, online=True, gps_fix=True,
-                           csq=max(10, min(31, 22 + (i % 5) - 2)))
+            publish_status(client, online=True, gps_fix=has_fix,
+                           csq=max(10, min(31, 22 + (cycle % 5) - 2)))
 
-            detected = [epc for kode, epc in PACKAGES.items()
-                        if not (kode in args.lost and progress >= args.lost_at)]
+            def is_lost(kode):
+                if kode not in args.lost or progress < args.lost_at:
+                    return False
+                return args.found_at is None or progress < args.found_at
+
+            detected = [epc for kode, epc in PACKAGES.items() if not is_lost(kode)]
 
             payload = {
                 "timestamp": make_timestamp(),
                 "id": TRUCK_ID,
-                "gps": {"lat": round(lat, 5), "lon": round(lon, 5), "speed": speed},
+                # Sama dengan firmware baru: belum fix -> "gps":null,
+                # RFID tetap dikirim agar Ck/status paket terus terpantau
+                "gps": {"lat": round(lat, 5), "lon": round(lon, 5), "speed": speed} if has_fix else None,
                 "detected_packages": detected,
                 "sent_ms": int(time.time() * 1000),  # untuk uji latensi NFR-02 (opsional)
             }
@@ -194,10 +224,12 @@ def main():
 
             hilang = len(PACKAGES) - len(detected)
             status = f"{hilang} paket HILANG" if hilang else "semua paket terbaca"
-            print(f"  [{i+1:2}/{total}] GPS ({lat:.5f}, {lon:.5f}) @ {speed:4.1f} km/h | "
+            gps_str = (f"GPS ({lat:.5f}, {lon:.5f}) @ {speed:4.1f} km/h" if has_fix
+                       else "GPS (belum fix -> gps:null)      ")
+            print(f"  [{cycle+1:2}/{total}] {gps_str} | "
                   f"{len(detected)}/{len(PACKAGES)} tag | {status}")
 
-            if i < total - 1:
+            if cycle < total - 1:
                 time.sleep(args.interval)
 
     except KeyboardInterrupt:
