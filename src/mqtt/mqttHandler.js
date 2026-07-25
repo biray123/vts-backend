@@ -140,9 +140,19 @@ async function processTelemetry(payload, recvMs) {
     console.warn('[MQTT] Payload tidak lengkap:', JSON.stringify(payload).substring(0, 100));
     return;
   }
-  const hasGps = gps != null
-    && Number.isFinite(Number(gps.lat))
-    && Number.isFinite(Number(gps.lon));
+  // hasGps harus memvalidasi RENTANG, bukan hanya "angka berhingga". Modul
+  // SIM7600G kadang mengeluarkan frame NMEA rusak yang tetap terparsing jadi
+  // angka (mis. lat=101.65, lon=0, speed=661km/h) — TinyGSM getGPS() tetap
+  // return true. Tanpa cek rentang, frame sampah ini tersimpan ke gps_log/
+  // rfid_event dan kemudian membuat MapLibre melempar "Invalid LngLat" di
+  // frontend. Tolak: di luar [-90,90]/[-180,180] atau (0,0) "GPS belum fix".
+  const gpsLat = gps != null ? Number(gps.lat) : NaN;
+  const gpsLon = gps != null ? Number(gps.lon) : NaN;
+  const hasGps = Number.isFinite(gpsLat)
+    && Number.isFinite(gpsLon)
+    && gpsLat >= -90 && gpsLat <= 90
+    && gpsLon >= -180 && gpsLon <= 180
+    && !(gpsLat === 0 && gpsLon === 0);
 
   // 1. Cari trip aktif untuk truk ini
   const tripRes = await query(
